@@ -1,8 +1,4 @@
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:1073013651.
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:856099459.
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:1168440382.
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:2424337707.
-import express from 'express';
+ import express from 'express';
 import { MongoClient } from 'mongodb';
 import * as dotenv from 'dotenv';
 
@@ -16,11 +12,35 @@ async function main() {
   console.log('Connected successfully to server');
   const db = client.db('hangries');
   const users = db.collection('users');
+  const chats = db.collection('chats');
 
 app.get('/', (req, res) => {
   const name = process.env.NAME || 'World';
   res.send(`Hello ${name}!`);
 });
+
+  app.post('/login', async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).send('Email and password are required');
+      }
+      const user = await users.findOne({ email, password });
+      if (!user) {
+        return res.status(401).send('Invalid email or password');
+      }
+      res.status(200).json({
+        message: 'Login successful',
+        userId: user._id,
+        userName: user.name,
+        userEmail: user.email,
+      });
+    } catch (err) {
+      console.error('Error logging in user:', err);
+      res.status(500).send('Error logging in');
+    }
+  });
+
 
   app.post('/signup', async (req, res) => {
     try {
@@ -40,6 +60,54 @@ app.get('/', (req, res) => {
       res.status(500).send('Error creating user');
     }
   });
+
+  app.post('/chats', async (req, res) => {
+    try {
+      const { message,chatname, chatSessionId, role } = req.body;
+      if (!message || !chatSessionId) {
+        return res.status(400).send('Message and chatSessionId are required');
+      }
+      const chat = { message, chatSessionId, chatname, role };
+      const result = await chats.insertOne(chat);
+      console.log(`New chat message created with the following id: ${result.insertedId}`);
+      res.status(201).json({
+        message: 'Chat message created successfully',
+        chatId: result.insertedId,
+      });
+    } catch (err) {
+      console.error('Error creating chat message:', err);
+      res.status(500).send('Error creating chat message');
+    }
+  });
+
+  app.get('/chats/:chatSessionId', async (req, res) => {
+    try {
+      const chatSessionId = req.params.chatSessionId;
+      const chatMessages = await chats.find({ chatSessionId }).toArray();
+      res.status(200).json(chatMessages);
+    } catch (err) {
+      console.error('Error retrieving chat messages:', err);
+      res.status(500).send('Error retrieving chat messages');
+    }
+  });
+
+  app.delete('/chats/:chatSessionId', async (req, res) => {
+    try {
+      const chatSessionId = req.params.chatSessionId;
+      const result = await chats.deleteMany({ chatSessionId });
+      if (result.deletedCount === 0) {
+        return res.status(404).send('No chat messages found with this chatSessionId');
+      }
+      console.log(`${result.deletedCount} chat messages deleted`);
+      res.status(200).json({
+        message: `${result.deletedCount} chat messages deleted successfully`,
+      });
+    } catch (err) {
+      console.error('Error deleting chat messages:', err);
+      res.status(500).send('Error deleting chat messages');
+    }
+  });
+
 
 const port = parseInt(process.env.PORT) || 3000;
 app.listen(port, () => {
