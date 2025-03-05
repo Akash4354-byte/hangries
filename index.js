@@ -1,3 +1,4 @@
+// Suggested code may be subject to a license. Learn more: ~LicenseLog:2386077346.
  import express from 'express';
 import { MongoClient } from 'mongodb';
 import * as dotenv from 'dotenv';
@@ -32,8 +33,6 @@ app.get('/', (req, res) => {
       res.status(200).json({
         message: 'Login successful',
         userId: user._id,
-        userName: user.name,
-        userEmail: user.email,
       });
     } catch (err) {
       console.error('Error logging in user:', err);
@@ -47,6 +46,11 @@ app.get('/', (req, res) => {
       const { name, email, password } = req.body;
       if (!name || !email || !password) {
         return res.status(400).send('Name, email, and password are required');
+      }
+
+      const existingUser = await users.findOne({ email });
+      if (existingUser) {
+        return res.status(409).send('User with this email already exists');
       }
       const user = { name, email, password };
       const result = await users.insertOne(user);
@@ -63,11 +67,11 @@ app.get('/', (req, res) => {
 
   app.post('/chats', async (req, res) => {
     try {
-      const { message,chatname, chatSessionId, role } = req.body;
+      const { chatSessionId, chatName, userId, message, role } = req.body;
       if (!message || !chatSessionId) {
         return res.status(400).send('Message and chatSessionId are required');
       }
-      const chat = { message, chatSessionId, chatname, role };
+      const chat = { chatSessionId, chatName, userId, message, role };
       const result = await chats.insertOne(chat);
       console.log(`New chat message created with the following id: ${result.insertedId}`);
       res.status(201).json({
