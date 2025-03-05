@@ -1,6 +1,11 @@
+// Suggested code may be subject to a license. Learn more: ~LicenseLog:2858814622.
+// Suggested code may be subject to a license. Learn more: ~LicenseLog:2393206431.
+// Suggested code may be subject to a license. Learn more: ~LicenseLog:2276826347.
+// Suggested code may be subject to a license. Learn more: ~LicenseLog:335127093.
 // Suggested code may be subject to a license. Learn more: ~LicenseLog:2386077346.
  import express from 'express';
 import { MongoClient } from 'mongodb';
+import nodemailer from 'nodemailer';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -14,6 +19,8 @@ async function main() {
   const db = client.db('hangries');
   const users = db.collection('users');
   const chats = db.collection('chats');
+  const passwordResetSessions = db.collection('passwordResetSessions');
+
 
 app.get('/', (req, res) => {
   const name = process.env.NAME || 'World';
@@ -135,6 +142,117 @@ app.get('/', (req, res) => {
     }
   });
 
+  // Create a Nodemailer transporter
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASSWORD,
+    },
+  });
+
+  function generateOTP() {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  app.post('/forgot-password', async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).send('Email is required');
+      }
+
+      const user = await users.findOne({ email });
+      if (!user) {
+        return res.status(404).send('User not found');
+      }
+
+      const otp = generateOTP();
+      const expiresAt = new Date(Date.now() + 2 * 60 * 1000); // 2 minutes from now
+      await passwordResetSessions.insertOne({ email, otp, expiresAt });
+
+      const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: 'Password Reset OTP',
+        text: `Your OTP for password reset is: ${otp}`,
+      };
+
+      transporter.sendMail(mailOptions, (error, info) => {
+        if (error) {
+          console.error('Error sending email:', error);
+          res.status(500).send('Error sending email');
+        } else {
+          console.log('Email sent:', info.response);
+          res.status(200).send('OTP sent to email');
+        }
+      });
+    } catch (err) {
+      console.error('Error initiating password reset:', err);
+      res.status(500).send('Error initiating password reset');
+    }
+  });
+
+  app.post('/verify-otp', async (req, res) => {
+    try {
+      const { email, otp } = req.body;
+      if (!email || !otp) {
+        return res.status(400).send('Email and OTP are required');
+      }
+
+      const session = await passwordResetSessions.findOne({ email, otp });
+      if (!session) {
+        return res.status(401).send('Invalid OTP');
+      }
+
+      if (session.expiresAt < new Date()) {
+        await passwordResetSessions.deleteOne({ _id: session._id });
+        return res.status(400).send('OTP has expired');
+      }
+
+      await passwordResetSessions.deleteOne({ _id: session._id });
+      res.status(200).send('OTP verified successfully');
+    } catch (err) {
+      console.error('Error verifying OTP:', err);
+      res.status(500).send('Error verifying OTP');
+    }
+  });
+
+  app.post('/reset-password', async (req, res) => {
+    try {
+      const { email, newPassword } = req.body;
+      if (!email || !newPassword) {
+        return res.status(400).send('Email and new password are required');
+      }
+
+      // Check if the user exists
+      const user = await users.findOne({ email });
+      if (!user) {
+        return res.status(404).send('User not found');
+      }
+
+      // Ensure there is no active reset session, if so, the user hasn't completed the full flow
+      const activeSession = await passwordResetSessions.findOne({ email });
+      if (activeSession) {
+        return res.status(400).send('OTP verification is required before resetting password');
+      }
+
+      // Update the user's password
+      const result = await users.updateOne(
+        { email },
+        { $set: { password: newPassword } }
+      );
+
+      if (result.modifiedCount === 0) {
+        return res.status(500).send('Failed to update password');
+      }
+
+      res.status(200).send('Password updated successfully');
+    } catch (err) {
+      console.error('Error resetting password:', err);
+      res.status(500).send('Error resetting password');
+    }
+  });
 
 const port = parseInt(process.env.PORT) || 3000;
 app.listen(port, () => {
