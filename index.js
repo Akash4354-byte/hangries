@@ -1,263 +1,317 @@
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:2858814622.
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:2393206431.
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:2276826347.
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:335127093.
-// Suggested code may be subject to a license. Learn more: ~LicenseLog:2386077346.
- import express from 'express';
-import { MongoClient } from 'mongodb';
-import nodemailer from 'nodemailer';
+import express from 'express';
+import { generate } from 'randomstring';
+import { MongoClient, ServerApiVersion, ObjectId } from 'mongodb';
 import * as dotenv from 'dotenv';
+import nodemailer from 'nodemailer';
+import cors from 'cors';
+
 
 dotenv.config();
+
 const app = express();
+app.use(cors());
 app.use(express.json());
-
-async function main() {
-  const client = new MongoClient(process.env.MONGO_URI);
-  await client.connect();
-  console.log('Connected successfully to server');
-  const db = client.db('hangries');
-  const users = db.collection('users');
-  const chats = db.collection('chats');
-  const passwordResetSessions = db.collection('passwordResetSessions');
-
-
-app.get('/', (req, res) => {
-  const name = process.env.NAME || 'World';
-  res.send(`Hello ${name}!`);
+// Replace the placeholder with your actual connection string
+const uri = process.env.MONGO_URI;
+if (!uri) console.error("MONGO_URI not found in env files")
+// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+const client = new MongoClient(uri, {
+    serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+    }
 });
 
-  app.post('/login', async (req, res) => {
+async function connectToDatabase() {
     try {
-      const { email, password } = req.body;
-      if (!email || !password) {
-        return res.status(400).send('Email and password are required');
-      }
-      const user = await users.findOne({ email, password });
-      if (!user) {
-        return res.status(401).send('Invalid email or password');
-      }
-      res.status(200).json({
-        message: 'Login successful',
-        userId: user._id,
-      });
-    } catch (err) {
-      console.error('Error logging in user:', err);
-      res.status(500).send('Error logging in');
+        // Connect the client to the server	(optional starting in v4.7)
+        await client.connect();
+        // Send a ping to confirm a successful connection
+        await client.db("admin").command({ ping: 1 });
+        console.log("Pinged your deployment. You successfully connected to MongoDB!");
+        return client;
+    } finally {
+
     }
-  });
-
-
-  app.post('/signup', async (req, res) => {
-    try {
-      const { name, email, password } = req.body;
-      if (!name || !email || !password) {
-        return res.status(400).send('Name, email, and password are required');
-      }
-
-      const existingUser = await users.findOne({ email });
-      if (existingUser) {
-        return res.status(409).send('User with this email already exists');
-      }
-      const user = { name, email, password };
-      const result = await users.insertOne(user);
-      console.log(`New user created with the following id: ${result.insertedId}`);
-      res.status(201).json({
-        message: 'User created successfully',
-        userId: result.insertedId,
-      });
-    } catch (err) {
-      console.error('Error creating user:', err);
-      res.status(500).send('Error creating user');
-    }
-  });
-
-  app.get('/chats/user/:userId', async (req, res) => {
-    try {
-      const userId = req.params.userId;
-      const chatSessions = await chats.aggregate([
-        { $match: { userId } },
-        { $sort: { createdAt: -1 } },
-        {
-          $group: {
-            _id: "$chatSessionId",
-            chatName: { $first: "$chatName" }
-           
-          }
-        },
-        { $project: { _id: 0, chatSessionId: "$_id", chatName: 1} }
-      ]).toArray();
-      res.status(200).json(chatSessions);
-    } catch (err) {
-      console.error('Error retrieving chat sessions:', err);
-      res.status(500).send('Error retrieving chat sessions');
-    }
-  });
-
-
-  app.post('/chats', async (req, res) => {
-    try {
-      const { chatSessionId, chatName, userId, message, role } = req.body;
-      if (!message || !chatSessionId) {
-        return res.status(400).send('Message and chatSessionId are required');
-      }
-      const chat = { chatSessionId, chatName, userId, message, role, createdAt: new Date() };
-      const result = await chats.insertOne(chat);
-      console.log(`New chat message created with the following id: ${result.insertedId}`);
-      res.status(201).json({
-        message: 'Chat message created successfully',
-        chatId: result.insertedId,
-      });
-    } catch (err) {
-      console.error('Error creating chat message:', err);
-      res.status(500).send('Error creating chat message');
-    }
-  });
-
-  app.get('/chats/:chatSessionId', async (req, res) => {
-    try {
-      const chatSessionId = req.params.chatSessionId;
-      const chatMessages = await chats.find({ chatSessionId }).toArray();
-      res.status(200).json(chatMessages);
-    } catch (err) {
-      console.error('Error retrieving chat messages:', err);
-      res.status(500).send('Error retrieving chat messages');
-    }
-  });
-
-  app.delete('/chats/:chatSessionId', async (req, res) => {
-    try {
-      const chatSessionId = req.params.chatSessionId;
-      const result = await chats.deleteMany({ chatSessionId });
-      if (result.deletedCount === 0) {
-        return res.status(404).send('No chat messages found with this chatSessionId');
-      }
-      console.log(`${result.deletedCount} chat messages deleted`);
-      res.status(200).json({
-        message: `${result.deletedCount} chat messages deleted successfully`,
-      });
-    } catch (err) {
-      console.error('Error deleting chat messages:', err);
-      res.status(500).send('Error deleting chat messages');
-    }
-  });
-
-  // Create a Nodemailer transporter
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD,
-    },
-  });
-
-  function generateOTP() {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  }
-
-  app.post('/forgot-password', async (req, res) => {
-    try {
-      const { email } = req.body;
-      if (!email) {
-        return res.status(400).send('Email is required');
-      }
-
-      const user = await users.findOne({ email });
-      if (!user) {
-        return res.status(404).send('User not found');
-      }
-
-      const otp = generateOTP();
-      const expiresAt = new Date(Date.now() + 2 * 60 * 1000); // 2 minutes from now
-      await passwordResetSessions.insertOne({ email, otp, expiresAt });
-
-      const mailOptions = {
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: 'Password Reset OTP',
-        text: `Your OTP for password reset is: ${otp}`,
-      };
-
-      transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-          console.error('Error sending email:', error);
-          res.status(500).send('Error sending email');
-        } else {
-          console.log('Email sent:', info.response);
-          res.status(200).send('OTP sent to email');
-        }
-      });
-    } catch (err) {
-      console.error('Error initiating password reset:', err);
-      res.status(500).send('Error initiating password reset');
-    }
-  });
-
-  app.post('/verify-otp', async (req, res) => {
-    try {
-      const { email, otp } = req.body;
-      if (!email || !otp) {
-        return res.status(400).send('Email and OTP are required');
-      }
-
-      const session = await passwordResetSessions.findOne({ email, otp });
-      if (!session) {
-        return res.status(401).send('Invalid OTP');
-      }
-
-      if (session.expiresAt < new Date()) {
-        await passwordResetSessions.deleteOne({ _id: session._id });
-        return res.status(400).send('OTP has expired');
-      }
-
-      await passwordResetSessions.deleteOne({ _id: session._id });
-      res.status(200).send('OTP verified successfully');
-    } catch (err) {
-      console.error('Error verifying OTP:', err);
-      res.status(500).send('Error verifying OTP');
-    }
-  });
-
-  app.post('/reset-password', async (req, res) => {
-    try {
-      const { email, newPassword } = req.body;
-      if (!email || !newPassword) {
-        return res.status(400).send('Email and new password are required');
-      }
-
-      // Check if the user exists
-      const user = await users.findOne({ email });
-      if (!user) {
-        return res.status(404).send('User not found');
-      }
-
-      // Ensure there is no active reset session, if so, the user hasn't completed the full flow
-      const activeSession = await passwordResetSessions.findOne({ email });
-      if (activeSession) {
-        return res.status(400).send('OTP verification is required before resetting password');
-      }
-
-      // Update the user's password
-      const result = await users.updateOne(
-        { email },
-        { $set: { password: newPassword } }
-      );
-
-      if (result.modifiedCount === 0) {
-        return res.status(500).send('Failed to update password');
-      }
-
-      res.status(200).send('Password updated successfully');
-    } catch (err) {
-      console.error('Error resetting password:', err);
-      res.status(500).send('Error resetting password');
-    }
-  });
-
-const port = parseInt(process.env.PORT) || 3000;
-app.listen(port, () => {
-  console.log(`listening on port ${port}`);
-});
 }
 
-main().catch(console.error);
+connectToDatabase().then((connectedClient) => {
+
+    const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+            user: process.env.GMAIL_USER,
+            pass: process.env.GMAIL_PASS,
+        },
+        // host: process.env.EMAIL_HOST,
+        // port: process.env.EMAIL_PORT,
+        // secure: true,
+        // auth: {
+        //   user: process.env.EMAIL_USER,
+        //   pass: process.env.EMAIL_PASS,
+    });
+
+    transporter.verify().then(() => {
+        console.log('SMTP server is ready to take our messages');
+    }).catch(err => {
+        console.error('Error verifying transporter:', err);
+    });
+
+    app.post('/forgot-password', async (req, res) => {
+        const { email } = req.body;
+        try {
+            const usersCollection = connectedClient.db('virtual_nutritionist').collection("users");
+            const user = await usersCollection.findOne({ email });
+            if (!user) {
+                return res.status(404).json({ message: 'User not found' });
+            }
+            const otp = generate({ length: 6, charset: 'numeric' });
+            const passwordResetSessions = connectedClient.db('virtual_nutritionist').collection("password-reset-sessions");
+            await passwordResetSessions.insertOne({ email, otp, createdAt: new Date() });
+
+
+            const mailOptions = {
+                from: `"Mental Health App" <${process.env.GMAIL_USER}>`,
+                to: email,
+                subject: 'Password Reset OTP',
+                html: `<p>Your OTP for password reset is: <strong>${otp}</strong></p>
+                    <p>This OTP is valid for 2 minutes.</p>`,
+            };
+
+            transporter.sendMail(mailOptions, (error, info) => {
+                if (error) {
+                    console.error('Error sending email:', error);
+                    res.status(500).json({ message: 'Error sending email' });
+                    return;
+                }
+                console.log('Email sent:', info.response);
+
+
+            });
+
+
+            res.status(200).json({ message: 'OTP sent successfully', email: email });
+        } catch (error) {
+            console.error("Error sending OTP:", error);
+            res.status(500).json({ message: 'Error sending OTP' });
+        }
+    });
+
+    app.post('/verify-otp', async (req, res) => {
+        const { email, otp } = req.body;
+        try {
+            const passwordResetSessions = connectedClient.db('virtual_nutritionist').collection("password-reset-sessions");
+            const session = await passwordResetSessions.findOne({ email, otp, createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) } }); // Check if OTP is within 2 minutes
+            if (!session) {
+                return res.status(400).json({ message: 'Invalid or expired OTP' });
+            }
+            await passwordResetSessions.deleteOne({ email, otp }); // Delete the session after verification
+            res.status(200).json({ message: 'OTP verified successfully' });
+        } catch (error) {
+            console.error("Error verifying OTP:", error);
+            res.status(500).json({ message: 'Error verifying OTP' });
+        }
+    });
+    app.post('/reset-password', async (req, res) => {
+        const { email, newPassword } = req.body;
+        try {
+            const usersCollection = connectedClient.db('virtual_nutritionist').collection("users");
+            await usersCollection.updateOne({ email }, { $set: { password: newPassword } });
+            res.status(200).json({ message: 'Password reset successfully' });
+        } catch (error) {
+            console.error("Error resetting password:", error);
+            res.status(500).json({ message: 'Error resetting password' });
+        }
+    });
+    app.post('/login', async (req, res) => {
+        const { email, password } = req.body;
+        try {
+            const usersCollection = connectedClient.db('virtual_nutritionist').collection("users");
+            const user = await usersCollection.findOne({ email });
+            if (!user || user.password !== password) {
+                return res.status(401).json({ message: 'Invalid email or password' });
+            }
+
+            res.status(200).json({ message: 'Logged in successfully', userid: user._id });
+        } catch (error) {
+            console.error("Error logging in:", error);
+            res.status(500).json({ message: 'Error logging in' });
+        }
+    });
+
+
+    app.post('/signup', async (req, res) => {
+        const { name, email, password } = req.body;
+
+        try {
+            const usersCollection = connectedClient.db('virtual_nutritionist').collection("users");
+            const existingUser = await usersCollection.findOne({ email });
+            if (existingUser) {
+                return res.status(409).json({ message: 'User with this email already exists' });
+            }
+
+            const result = await usersCollection.insertOne({ name, email, password });
+            res.status(201).json({ message: 'User created', userId: result.insertedId });
+        } catch (error) {
+            console.error("Error creating user:", error);
+            res.status(500).json({ message: 'Error creating user' });
+        }
+    });
+
+    // Create a new chat message
+    app.post('/chat', async (req, res) => {
+        const { chatSessionId, chatName, userId, message, role } = req.body;
+        try {
+            const chatsCollection = connectedClient.db('virtual_nutritionist').collection("chats");
+            const result = await chatsCollection.insertOne({ chatSessionId, chatName, userId, message, role, createdAt: new Date() });
+            res.status(201).json({ message: 'Message created', messageId: result.insertedId });
+        } catch (error) {
+            console.error("Error creating message:", error);
+            res.status(500).json({ message: 'Error creating message' });
+        }
+    });
+
+    // Get chats by user ID
+    app.get('/chats/:userId', async (req, res) => {
+        const { userId } = req.params;
+        try {
+            const chatsCollection = connectedClient.db('virtual_nutritionist').collection("chats");
+            const chats = await chatsCollection.aggregate([
+                { $match: { userId: userId } },
+                { $sort: { createdAt: -1 } }, // Sort by the timestamp of the last message in descending order
+                {
+                    $group: {
+                        _id: "$chatSessionId", // Group by chatSessionId to get unique chats
+                        chatName: { $first: "$chatName" },
+                        createdAt: { $first: "$createdAt" },
+                    }
+                },
+                { $project: { _id: 0, chatSessionId: "$_id", chatName: 1, createdAt: 1 } } // Reshape the result to have chatName and chatSessionId
+            ]).toArray();
+            // Sort chats by createdAt in descending order (most recent first)
+            const sortedChats = chats.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            res.status(200).json(sortedChats);
+        } catch (error) {
+            console.error("Error retrieving chats:", error);
+            res.status(500).json({ message: 'Error retrieving chats' });
+        }
+    });
+    // Get all messages for a chat session
+    app.get('/chat/:chatSessionId', async (req, res) => {
+        const { chatSessionId } = req.params;
+        try {
+            const chatsCollection = connectedClient.db('virtual_nutritionist').collection("chats");
+            const messages = await chatsCollection.find({ chatSessionId }).toArray();
+            res.status(200).json(messages);
+        } catch (error) {
+            console.error("Error retrieving messages:", error);
+            res.status(500).json({ message: 'Error retrieving messages' });
+        }
+    });
+
+    //Update the chatName after summerizing the chat
+    app.put('/chat/:chatSessionId', async (req, res) => {
+        const { chatSessionId } = req.params;
+        const { newChatName } = req.body;
+        try {
+            const chatsCollection = connectedClient.db('virtual_nutritionist').collection("chats");
+            const result = await chatsCollection.updateMany({ chatSessionId }, { $set: { chatName: newChatName } });
+            res.status(200).json({ message: `Updated ${result.modifiedCount} messages with new chat name`, chatSessionId: chatSessionId, newChatName: newChatName });
+        } catch (error) {
+            console.error("Error updating chat name:", error);
+            res.status(500).json({ message: 'Error updating chat name' });
+        }
+    });
+
+
+    // Delete all messages for a chat session
+    app.delete('/chat/:chatSessionId', async (req, res) => {
+        const { chatSessionId } = req.params;
+        try {
+            const chatsCollection = connectedClient.db('virtual_nutritionist').collection("chats");
+
+            // Check if any messages exist for the given chatSessionId
+            const messageCount = await chatsCollection.countDocuments({ chatSessionId });
+            if (messageCount === 0) {
+                return res.status(404).json({ message: 'No messages found for this chat session ID' });
+            }
+
+            // Delete all messages with the given chatSessionId
+            const result = await chatsCollection.deleteMany({ chatSessionId });
+            res.status(200).json({ message: `Deleted ${result.deletedCount} messages` });
+        } catch (error) {
+            console.error("Error deleting messages:", error);
+            res.status(500).json({ message: 'Error deleting messages' });
+        }
+    });
+
+    app.post('/nutrition', async (req, res) => {
+        const { userId, title, overall_feeling, nutrition_entry } = req.body;
+        const datetime = new Date();
+        try {
+            const nutritionsCollection = connectedClient.db('virtual_nutritionist').collection("nutritions");
+            const result = await nutritionsCollection.insertOne({ userId, title, overall_feeling, nutrition_entry, datetime });
+            res.status(201).json({ message: 'Nutrition entry created', entryId: result.insertedId });
+        } catch (error) {
+            console.error("Error creating nutrition entry:", error);
+            res.status(500).json({ message: 'Error creating nutrition entry. '+error });
+        }
+    });
+    
+    
+    app.put('/nutrition/:entryId', async (req, res) => {
+        const { entryId } = req.params;
+        const { userId, title, nutrition_entry } = req.body;
+        try {
+            const nutritionsCollection = connectedClient.db('virtual_nutritionist').collection("nutritions");
+            const result = await nutritionsCollection.updateOne({ _id: new ObjectId(entryId) }, { $set: { userId, title, nutrition_entry } });
+            if (result.matchedCount === 0) {
+                return res.status(404).json({ message: 'Nutrition entry not found' });
+            }
+            res.status(200).json({ message: 'Nutrition entry updated', entryId: entryId });
+        } catch (error) {
+            console.error("Error updating nutrition entry:", error);
+            res.status(500).json({ message: 'Error updating nutrition entry' });
+        }
+    });
+    
+    
+    
+    app.get('/nutritions/:userId', async (req, res) => {
+        const { userId } = req.params;
+        try {
+            const nutritionsCollection = connectedClient.db('virtual_nutritionist').collection("nutritions");
+            const nutritions = await nutritionsCollection.find({ userId }).toArray();
+            res.status(200).json(nutritions);
+        } catch (error) {
+            console.error("Error retrieving nutritions:", error);
+            res.status(500).json({ message: 'Error retrieving nutritions' });
+        }
+    });
+    
+    app.delete('/nutrition/:entryId', async (req, res) => {
+        const { entryId } = req.params;
+        try {
+            const nutritionsCollection = connectedClient.db('virtual_nutritionist').collection("nutritions");
+            const result = await nutritionsCollection.deleteOne({ _id: new ObjectId(entryId) });
+            if (result.deletedCount === 0) {
+                return res.status(404).json({ message: 'nutrition entry not found' });
+            }
+            res.status(200).json({ message: 'nutrition entry deleted', entryId: entryId });
+        } catch (error) {
+            console.error("Error deleting nutrition entry:", error);
+            res.status(500).json({ message: 'Error deleting nutrition entry', error: error });
+        }
+    });
+});
+
+app.get('/', (req, res) => {
+    const name = process.env.NAME || 'World';
+    res.send(`Hello ${name}!`);
+});
+
+const port = parseInt(process.env.PORT || '3000');
+app.listen(port, () => {
+    console.log(`listening on port ${port}`);
+});
